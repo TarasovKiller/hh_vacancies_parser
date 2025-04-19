@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 from google.oauth2 import service_account
 # Импорт для работы с Google Sheets
+from requests.exceptions import HTTPError as HttpRequestError
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
@@ -103,7 +104,44 @@ def get_hh_token():
     print("Токен успешно получен и сохранён в", token_file)
     return token_data.get("access_token")
 
-
+def refresh_hh_token(refresh_token):
+    """
+    Обновляет access и refresh токены HH.ru.
+    
+    :param refresh_token: Текущий refresh_token
+    :param client_id: Client ID приложения HH.ru
+    :param client_secret: Client Secret приложения HH.ru
+    :return: Новый access_token или None при ошибке
+    """
+    token_url = "https://hh.ru/oauth/token"  # Официальный эндпоинт HH.ru
+    
+    data = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": HH_CLIENT_ID,
+        "client_secret": HH_CLIENT_SECRET
+    }
+    
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+    
+    try:
+        response = requests.post(token_url, data=data, headers=headers)
+        response.raise_for_status()
+        
+        token_data = response.json()
+        
+        # Сохраняем новые токены (включая новый refresh_token)
+        with open("hh_token.json", "w") as f:
+            json.dump(token_data, f)
+            
+        return token_data["access_token"]
+        
+    except requests.exceptions.RequestException as e:
+        print(f"Ошибка при обновлении токенов: {e}")
+        return None
+    
 # ===============================
 # Работа с базой данных
 # ===============================
@@ -466,7 +504,14 @@ def export_to_google_sheets():
 
     print(f"Обновлено строк: {len(rows)}")
 
-
+def get_refresh_token():
+    token_file = "hh_token.json"
+    # Если файл с токеном уже есть – читаем
+    if os.path.exists(token_file):
+        with open(token_file, "r") as f:
+            token_data = json.load(f)
+        return token_data.get("refresh_token")
+    
 # ===============================
 # Главная функция
 # ===============================
@@ -474,10 +519,13 @@ def main():
     init_db()
     access_token = get_hh_token()
 
-    # 1. Пример парсинга за последний месяц с parts=30
-    parse_last_1_months(access_token, parts=20)
-
-    # 2. Экспортируем полученные данные в Google Sheets
+    try:
+        parse_last_1_months(access_token, parts=20)
+    except HttpRequestError as e:
+        print(e)
+        refresh_hh_token(get_refresh_token())
+        raise
+        
     export_to_google_sheets()
 
 
